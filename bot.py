@@ -9,7 +9,9 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
-TWITCH_USERNAMES = os.getenv("TWITCH_USERNAMES", "").split(",")  # comma-separated list
+TWITCH_USERNAMES = os.getenv("TWITCH_USERNAMES", "")
+usernames = [u.strip().lower() for u in TWITCH_USERNAMES.split(",") if u.strip()]
+
 
 CHECK_INTERVAL = 60  # in seconds
 
@@ -17,7 +19,19 @@ intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
 access_token = None
-user_ids = {}  # username -> id
+user_ids = {}
+for uname in usernames:
+    try:
+        ids = await get_user_ids(session, access_token, [uname])
+        if uname in ids:
+            user_ids[uname] = ids[uname]
+        else:
+            print(f"⚠ Username not found: {uname}")
+    except Exception as e:
+        print(f"⚠ Error fetching ID for {uname}: {e}")
+if not user_ids:
+    print("No valid Twitch usernames found—stopping.")
+    return
 live_status = {}  # username -> bool
 
 async def get_twitch_token(session):
