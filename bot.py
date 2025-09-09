@@ -1,128 +1,101 @@
+import os
 import discord
 import aiohttp
 import asyncio
-import os
-from datetime import datetime
 
-# === CONFIG ===
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
+DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", 0))
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
-TWITCH_USERNAMES = os.getenv("TWITCH_USERNAMES", "")
-usernames = [u.strip().lower() for u in TWITCH_USERNAMES.split(",") if u.strip()]
+TWITCH_USERNAMES = os.getenv("TWITCH_USERNAMES", "")  # comma-separated
 
-
-CHECK_INTERVAL = 60  # in seconds
+# Clean and prepare list of usernames
+STREAMERS = [u.strip().lower() for u in TWITCH_USERNAMES.split(",") if u.strip()]
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
-access_token = None
-user_ids = {}
-for uname in usernames:
-    try:
-        ids = await get_user_ids(session, access_token, [uname])
-        if uname in ids:
-            user_ids[uname] = ids[uname]
-        else:
-            print(f"⚠ Username not found: {uname}")
-    except Exception as e:
-        print(f"⚠ Error fetching ID for {uname}: {e}")
-if not user_ids:
-    print("No valid Twitch usernames found—stopping.")
-    return
-live_status = {}  # username -> bool
-
 async def get_twitch_token(session):
-    url = 'https://id.twitch.tv/oauth2/token'
+    url = "https://id.twitch.tv/oauth2/token"
     params = {
-        'client_id': TWITCH_CLIENT_ID,
-        'client_secret': TWITCH_CLIENT_SECRET,
-        'grant_type': 'client_credentials'
+        "client_id": TWITCH_CLIENT_ID,
+        "client_secret": TWITCH_CLIENT_SECRET,
+        "grant_type": "client_credentials",
     }
     async with session.post(url, params=params) as resp:
         data = await resp.json()
-        return data['access_token']
+        return data.get("access_token")
 
-async def get_user_ids(session, token, usernames):
-    url = f"https://api.twitch.tv/helix/users?login={'&login='.join(usernames)}"
+async def get_user_id(session, access_token, username):
+    url = "https://api.twitch.tv/helix/users"
     headers = {
-        'Client-ID': TWITCH_CLIENT_ID,
-        'Authorization': f'Bearer {token}'
+        "Client-ID": TWITCH_CLIENT_ID,
+        "Authorization": f"Bearer {access_token}",
     }
-    async with session.get(url, headers=headers) as resp:
+    params = {"login": username}
+    async with session.get(url, headers=headers, params=params) as resp:
         data = await resp.json()
-        results = {}
-        for user in data.get("data", []):
-            results[user["login"].lower()] = user["id"]
-        return results
+        users = data.get("data", [])
+        if users:
+            return users[0]["id"]
+        else:
+            print(f"⚠ Username not found on Twitch: {username}")
+            return None
 
-async def check_streams(session, token, ids):
-    url = f"https://api.twitch.tv/helix/streams?user_id=" + "&user_id=".join(ids)
+async def check_streams(client, channel, user_ids, session, access_token):
+    url = "https://api.twitch.tv/helix/streams"
     headers = {
-        'Client-ID': TWITCH_CLIENT_ID,
-        'Authorization': f'Bearer {token}'
+        "Client-ID": TWITCH_CLIENT_ID,
+        "Authorization": f"Bearer {access_token}",
     }
-    async with session.get(url, headers=headers) as resp:
-        data = await resp.json()
-        return {stream["user_login"]: stream for stream in data.get("data", [])}
 
-async def monitor_streams():
-    global access_token, user_ids
+    live_now = set()
+    while True:
+        params = []
+        for uid in user_ids:
+            params.append(("user_id", uid))
 
-    await client.wait_until_ready()
-    channel = client.get_channel(DISCORD_CHANNEL_ID)
+        async with session.get(url, headers=headers, params=params) as resp:
+            data = await resp.json()
+            streams = data.get("data", [])
+            live_now.clear()
+            for stream in streams:
+                live_now.add(stream["user_login"].lower())
 
-    async with aiohttp.ClientSession() as session:
-        access_token = await get_twitch_token(session)
-        user_ids = await get_user_ids(session, access_token, TWITCH_USERNAMES)
-
-        if not user_ids:
-            print("❌ Could not fetch user IDs.")
-            return
-
-        for username in TWITCH_USERNAMES:
-            live_status[username] = False
-
-        print(f"✅ Monitoring streamers: {', '.join(user_ids.keys())}")
-
-        while not client.is_closed():
-            try:
-                streams = await check_streams(session, access_token, list(user_ids.values()))
-
-                live_now = set(streams.keys())
-
-                for username in TWITCH_USERNAMES:
-                    was_live = live_status.get(username, False)
-                    is_now_live = username in live_now
-
-                    if is_now_live and not was_live:
-                        stream = streams[username]
-                        title = stream['title']
-                        game = stream.get('game_name', 'Unknown')
-                        url = f"https://twitch.tv/{username}"
-                        message = (
-                            f"🔴 **{username.upper()} is now LIVE!**\n"
-                            f"**Title**: {title}\n"
-                            f"**Game**: {game}\n"
-                            f"🔗 {url}"
-                        )
-                        await channel.send(message)
-                        print(f"[{datetime.now()}] {username} went live.")
-                    elif not is_now_live and was_live:
-                        print(f"[{datetime.now()}] {username} went offline.")
-
-                    live_status[username] = is_now_live
-
-            except Exception as e:
-                print(f"⚠️ Error checking streams: {e}")
-
-            await asyncio.sleep(CHECK_INTERVAL)
+        for username in STREAMERS:
+            if username in live_now:
+                await channel.send(f"🔴 **{username}** is now LIVE on Twitch! https://twitch.tv/{username}")
+        
+        await asyncio.sleep(60)  # Check every 60 seconds
 
 @client.event
 async def on_ready():
     print(f"🤖 Logged in as {client.user}")
-    client.loop.create_task(monitor_streams())
+    channel = client.get_channel(DISCORD_CHANNEL_ID)
+    if channel is None:
+        print(f"❌ Could not find Discord channel with ID {DISCORD_CHANNEL_ID}")
+        await client.close()
+        return
+
+    async with aiohttp.ClientSession() as session:
+        access_token = await get_twitch_token(session)
+        if not access_token:
+            print("❌ Could not get Twitch access token")
+            await client.close()
+            return
+
+        user_ids = []
+        for username in STREAMERS:
+            uid = await get_user_id(session, access_token, username)
+            if uid:
+                user_ids.append(uid)
+
+        if not user_ids:
+            print("❌ No valid Twitch user IDs found. Stopping bot.")
+            await client.close()
+            return
+        
+        print(f"✅ Monitoring streamers: {', '.join(STREAMERS)}")
+        await check_streams(client, channel, user_ids, session, access_token)
 
 client.run(DISCORD_TOKEN)
