@@ -7,10 +7,10 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", 0))
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
-TWITCH_USERNAMES = os.getenv("TWITCH_USERNAMES", "")  # comma-separated
+TWITCH_USERNAMES = os.getenv("TWITCH_USERNAMES", "")  # semicolon-separated
 
-# Clean and prepare list of usernames
-STREAMERS = [u.strip().lower() for u in TWITCH_USERNAMES.split(",") if u.strip()]
+# Use semicolon as separator now
+STREAMERS = [u.strip().lower() for u in TWITCH_USERNAMES.split(";") if u.strip()]
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -27,6 +27,7 @@ async def get_twitch_token(session):
         return data.get("access_token")
 
 async def get_user_id(session, access_token, username):
+    print(f"🔍 Fetching Twitch ID for username: {username}")
     url = "https://api.twitch.tv/helix/users"
     headers = {
         "Client-ID": TWITCH_CLIENT_ID,
@@ -35,6 +36,7 @@ async def get_user_id(session, access_token, username):
     params = {"login": username}
     async with session.get(url, headers=headers, params=params) as resp:
         data = await resp.json()
+        print(f"📄 Twitch API response for {username}: {data}")
         users = data.get("data", [])
         if users:
             return users[0]["id"]
@@ -71,6 +73,10 @@ async def check_streams(client, channel, user_ids, session, access_token):
 @client.event
 async def on_ready():
     print(f"🤖 Logged in as {client.user}")
+    print(f"🧪 Twitch usernames to check: {STREAMERS}")
+    print(f"🧪 Twitch Client ID: {TWITCH_CLIENT_ID}")
+    print(f"🧪 Twitch Client Secret: {'set' if TWITCH_CLIENT_SECRET else 'NOT SET'}")
+
     channel = client.get_channel(DISCORD_CHANNEL_ID)
     if channel is None:
         print(f"❌ Could not find Discord channel with ID {DISCORD_CHANNEL_ID}")
